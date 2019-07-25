@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from copy import copy
+import io
 import json
 from os.path import join, exists, isfile
 from os import makedirs
@@ -13,6 +14,7 @@ from tensorboardX import SummaryWriter
 import torch
 import torch.optim
 from torch.utils.data import DataLoader
+from torchvision.transforms import ToTensor
 from tqdm import tqdm
 import yaml
 
@@ -78,7 +80,7 @@ def load_hparams(hparams_path):
 
 def create_logdir(hparams):
     """
-    Create log directory: f'./models/{model_name}_{in_channels}_{out_channels}_{start_time}'
+    Create log directory: f'/home/konstantin/training_pipeline/models/{model_name}_{in_channels}_{out_channels}_{start_time}'
     """
     model_params = hparams['model']
     model_name = model_params['name']
@@ -86,7 +88,7 @@ def create_logdir(hparams):
     model_out_channels = model_params['out_channels']
     cur_time = time.ctime().replace(' ', '_').replace(':', '-')
     
-    model_dir = f'./models/{model_name}_{model_in_channels}_{model_out_channels}_{cur_time}'
+    model_dir = f'/home/konstantin/training_pipeline/models/{model_name}_{model_in_channels}_{model_out_channels}_{cur_time}'
 
     if not exists(model_dir):
         makedirs(model_dir)
@@ -100,8 +102,11 @@ def prepare_model(hparams):
 
     model_params = hparams['model']
     model_name = model_params.pop('name')
+    
+    # TODO: add default value of in_channels and out_channels to 1
 
     model = models.__dict__[model_name](**model_params)
+    #model.apply(models.weight_init)
     model.to(device)
     
     return model
@@ -219,7 +224,24 @@ def add_metrics(summary_writer, epoch_metrics, epoch, mode):
     """
     for metric_name, metric_value in epoch_metrics.items():
         m_value = metric_value
-        summary_writer.add_scalar('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
+        if metric_name in ['inference_result']:
+            m_value = prepare_infer_image(m_value)
+            summary_writer.add_image('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
+        else:
+            summary_writer.add_scalar('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
+
+
+def prepare_infer_image(infer_result):
+    """
+    Transforms output of neural network to image that can be shown at tensorboard
+    :param infer_result: torch.Tensor, shape (C, W, H) - channels, width, height, representing 
+                         output from the neural network
+    :return: normalized output from the neural network moved to cpu()
+    """
+    denominator = torch.max(infer_result[0]) - torch.min(infer_result[0])
+    image = (infer_result[0].cpu() - torch.min(infer_result)) / denominator
+
+    return image.unsqueeze_(0)
 
 
 def run_train_val_loader(epoch, loader, mode, model, 
@@ -259,7 +281,20 @@ def run_train_val_loader(epoch, loader, mode, model,
                     value = criterion.loss(output, targets)
                     epoch_metrics[criterion.name].append(value.data.cpu().numpy().astype(np.float))
 
-                total_loss_ = total_loss(output, targets)
+                #total_loss_ = total_loss(output, targets)
+                #epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
+                
+                # TODO: remake this alpha scheduler to work internally
+                if epoch == 0:
+                    total_loss_ = loss.MSELoss()(output, targets)
+                elif 0.5 < loss_functions[0].alpha < 1 and len(loss_functions) == 2:
+                    alpha = alpha_scheduler(epoch, loss_functions[0].alpha)
+                    total_loss_ = alpha * loss_functions[0].loss(output, targets) + (1 - alpha) * loss_functions[1].loss(output, targets)
+                elif 0 < loss_functions[0].alpha < 0.5 and len(loss_functions) == 2:
+                    alpha = alpha_scheduler(epoch, loss_functions[1].alpha)
+                    total_loss_ = (1 - alpha) * loss_functions[0].loss(output, targets) + alpha * loss_functions[1].loss(output, targets)
+                else:
+                    total_loss_ = total_loss(output, targets)
                 epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
 
                 if mode == 'train':
@@ -274,17 +309,17 @@ def run_train_val_loader(epoch, loader, mode, model,
         epoch_metrics[metric_name] = np.mean(np.array(metric_values))
     
     print("{epoch} * Epoch ({mode}): ".format(epoch=epoch, mode=mode), epoch_metrics['total_loss'])
+    epoch_metrics['inference_result'] = output[-1]
 
     return epoch_metrics
 
 
-def save_checkpoint(model, optimizer, epoch, hparams, best_metrics, logdir):
+def save_checkpoint(model, optimizer, epoch, best_metrics, logdir):
     state = {
         "epoch": epoch,
         "best_metrics": best_metrics,
         "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "hparams": hparams
+        "optimizer_state_dict": optimizer.state_dict()
     }
 
     if not exists(logdir):
@@ -306,6 +341,20 @@ def load_checkpoint(ckpt_path):
            model_state_dict, optimizer_state_dict, hparams
 
 
+
+
+    # TODO: move to a separate module
+def alpha_scheduler(epoch, base=0.999):
+
+    def magic_function(epoch, multiplier=4):
+        a = (epoch - 20) / multiplier
+        return (np.exp(a) / (np.exp(a) + 1) )
+
+    return base * magic_function(epoch)
+
+
+
+
 def run_train(args):
     hparams = load_hparams(args.hparams)
 
@@ -313,6 +362,9 @@ def run_train(args):
     fix_random_seed(seed)
 
     model_dir = create_logdir(hparams)
+    with open(join(model_dir, 'config.yaml'), 'w') as outfile:
+        yaml.dump(hparams, outfile, default_flow_style=False)
+
     model = prepare_model(hparams)
     total_loss, loss_functions, optimizer, scheduler = prepare_training(hparams, model)
     
@@ -365,8 +417,9 @@ def run_train(args):
 
         if is_best:
             save_checkpoint(model, optimizer, epoch,
-                            hparams, best_metrics, logdir=model_dir)
+                            best_metrics, logdir=model_dir)
 
         add_metrics(summary_writer, train_metrics, epoch, 'train')
         add_metrics(summary_writer, valid_metrics, epoch, 'valid')
+        # add images to the tensorboard
 

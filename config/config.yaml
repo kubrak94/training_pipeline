@@ -1,7 +1,7 @@
 # model parameters
 model: 
   # name of model class
-  name: FCDenseNet67
+  name: myAutoencoderTied
   # number of input channels
   in_channels: 1
   # number of output channels
@@ -15,6 +15,8 @@ losses:
     alpha: 0.95
   - name: L1Loss
     alpha: 0.05
+# добавить scheduler для alpha      
+ 
 # optimizer parameters
 optimizer:
   # name of optimizer class
@@ -37,7 +39,7 @@ batch_size: 1
 # number of workers
 num_workers: 8
 # number of iterations over the training set
-train_iter: 1
+train_iter: 2
 
 # random seed for reproducebility
 seed: 242
@@ -45,12 +47,13 @@ seed: 242
 # DataLoader parameters
 dataset:
   name: FCDataset
-  train_csv_file: ./data/train.csv
-  val_csv_file: ./data/val.csv
-  test_csv_file: ./data/test.csv
-  root_dir: ./data/images
+  train_csv_file: /home/konstantin/training_pipeline/data/train.csv
+  val_csv_file: /home/konstantin/training_pipeline/data/val.csv
+  test_csv_file: /home/konstantin/training_pipeline/data/test.csv
+  root_dir: /home/konstantin/training_pipeline/data/images
   augmentations:
     # augmentations to apply on the image during training phase
+# add config for switching on/off wavelet function
     train:
       # input size, length of largest size
       - name: LongestMaxSize
@@ -76,10 +79,6 @@ dataset:
             contrast_limit: 0.0
             p: 1
           - name: RandomGamma
-      # normalization parameters
-      - name: Normalize
-        mean: [0.485, 0.456, 0.406]
-        std: [0.229, 0.224, 0.225]
     # augmentations to apply on the image during validation and testing phases
     # basically, just transform the image, so it can fit the network's output 
     validation:
@@ -89,6 +88,3 @@ dataset:
       - name: PadIfNeeded
         min_height: 576
         min_width: 576
-      - name: Normalize
-        mean: [0.485, 0.456, 0.406]
-        std: [0.229, 0.224, 0.225]
