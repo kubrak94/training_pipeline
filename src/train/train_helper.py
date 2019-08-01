@@ -84,8 +84,10 @@ def create_logdir(hparams):
     """
     model_params = hparams['model']
     model_name = model_params['name']
-    model_in_channels = model_params['in_channels']
-    model_out_channels = model_params['out_channels']
+    
+    # by default assume that we have 1 input and 1 output channel
+    model_in_channels = model_params['in_channels'] if 'in_channels' in model_params else 1
+    model_out_channels = model_params['out_channels'] if 'out_channels' in model_params else 1
     cur_time = time.ctime().replace(' ', '_').replace(':', '-')
     
     model_dir = f'/home/konstantin/training_pipeline/models/{model_name}_{model_in_channels}_{model_out_channels}_{cur_time}'
@@ -102,11 +104,9 @@ def prepare_model(hparams):
 
     model_params = hparams['model']
     model_name = model_params.pop('name')
-    
-    # TODO: add default value of in_channels and out_channels to 1
 
     model = models.__dict__[model_name](**model_params)
-    #model.apply(models.weight_init)
+    model.apply(models.weight_init)
     model.to(device)
     
     return model
@@ -194,6 +194,7 @@ def prepare_dataloader(hparams, mode):
         csv_file = train_csv_file
     else:
         transforms = data.prepare_transforms(augmentations['validation'])
+        dataloader_params.pop('repeat_dataset')
         if mode == 'test':
             csv_file = test_csv_file
         else:
@@ -346,8 +347,8 @@ def load_checkpoint(ckpt_path):
     # TODO: move to a separate module
 def alpha_scheduler(epoch, base=0.999):
 
-    def magic_function(epoch, multiplier=4):
-        a = (epoch - 20) / multiplier
+    def magic_function(epoch, multiplier=2):
+        a = (epoch - 15) / multiplier
         return (np.exp(a) / (np.exp(a) + 1) )
 
     return base * magic_function(epoch)
@@ -421,5 +422,4 @@ def run_train(args):
 
         add_metrics(summary_writer, train_metrics, epoch, 'train')
         add_metrics(summary_writer, valid_metrics, epoch, 'valid')
-        # add images to the tensorboard
 

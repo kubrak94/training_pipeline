@@ -75,6 +75,11 @@ class FCDenseNet(nn.Module):
                    padding=0, bias=True)
         self.softmax = nn.Sigmoid()
 
+
+        ## ReLU ##
+
+        self.relu = nn.ReLU()
+
     def forward(self, x):
         out = self.firstconv(x)
 
@@ -91,7 +96,8 @@ class FCDenseNet(nn.Module):
             out = self.denseBlocksUp[i](out)
 
         out = self.finalConv(out)
-        out = self.softmax(out)
+        #out = self.softmax(out)
+        out = self.relu(out)
         return out
 
 

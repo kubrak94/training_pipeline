@@ -60,5 +60,5 @@ class MyAutoencoderTied(nn.Module):
         return x
 
 
-def myAutoencoderTied(in_channels=1, out_channels=1):
+def myAutoencoderTied():
     return MyAutoencoderTied(1, 16, 2)
