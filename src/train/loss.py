@@ -124,16 +124,28 @@ class SSIM(torch.nn.Module):
         return ssim(img1, img2, window=window, window_size=self.window_size, size_average=self.size_average)
 
 class MSSSIM(torch.nn.Module):
-    def __init__(self, window_size=11, size_average=True, channel=3):
+    def __init__(self, window_size=11, size_average=True, channel=3, val_range=255):
         super(MSSSIM, self).__init__()
         self.window_size = window_size
         self.size_average = size_average
         self.channel = channel
-
+        self.val_range = val_range
     def forward(self, img1, img2):
         # TODO: store window between calls if possible
         # TODO: Fix it!
-        return 1 - msssim(img1, img2, window_size=self.window_size, size_average=self.size_average, normalize=True)
+        return 1 - msssim(img1, img2, window_size=self.window_size, size_average=self.size_average, val_range=self.val_range, normalize=False)
+    
+class MSSSIM_wavelet(torch.nn.Module):
+    def __init__(self, window_size=11, size_average=True, channel=3, val_range=5):
+        super(MSSSIM_wavelet, self).__init__()
+        self.window_size = window_size
+        self.size_average = size_average
+        self.channel = channel
+        self.val_range = val_range
+    def forward(self, img1, img2):
+        # TODO: store window between calls if possible
+        # TODO: Fix it!
+        return 1 - msssim(img1, img2, window_size=self.window_size, size_average=self.size_average, val_range=self.val_range, normalize=False)
 
 
 class TotalLoss(torch.nn.Module):

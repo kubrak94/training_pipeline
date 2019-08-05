@@ -6,24 +6,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch.autograd import Variable
+from src.models.common_blocks import ConvBlock, ConvTransposeBlock
+activations = {
+       'relu': F.relu,
+       'sigmoid': F.sigmoid,
+       'softmax': F.softmax
+}
 
-class ConvBlock(nn.Module):
-    
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, bias = True):
-        super(ConvBlock, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, 
-                                              padding, bias = bias)
-    def forward(self, x):
-        return F.relu(self.conv(x))
-        
-class ConvTransposeBlock(nn.Module):
-    
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, bias = True):
-        super(ConvTransposeBlock, self).__init__()
-        self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, 
-                                              padding, bias=bias)
-    def forward(self, x):
-        return F.relu(self.conv(x))
 
 class EncoderBlock(nn.Sequential):
     
@@ -41,9 +30,9 @@ class EncoderBlock(nn.Sequential):
         
 class MyAutoencoderTied(nn.Module):
     def __init__(self, in_channels=1, start_features_num=16, expand_rate=2, kernel_sizes=[5,2,5,2,5], 
-                 strides = [1,2,1,2,1], paddings = [2,0,2,0,2], bias = False):
+                 strides = [1,2,1,2,1], paddings = [2,0,2,0,2], bias = False, final_activation='relu'):
         super(MyAutoencoderTied, self).__init__()
-        
+        self.final_activation = final_activation
         self.encoder = EncoderBlock(in_channels, start_features_num, expand_rate, kernel_sizes, strides,
                                     paddings, bias)
         
@@ -56,9 +45,13 @@ class MyAutoencoderTied(nn.Module):
         for i in range(len(self.encoder)-1,-1,-1):
             conv_layer = self.encoder[i].conv
             x = F.conv_transpose2d(input=x, weight=conv_layer.weight, padding=conv_layer.padding, stride=conv_layer.stride,bias=conv_layer.bias)
-            x = F.relu(x)
+            if i==0 and self.final_activation=='linear':
+                continue
+            else:
+                x = activations['relu'](x)
         return x
 
 
-def myAutoencoderTied():
-    return MyAutoencoderTied(1, 16, 2)
+def myAutoencoderTied(in_channels, out_channels, final_activation):
+    return MyAutoencoderTied(in_channels, 16, 2, kernel_sizes=[5,2,5,2,5], 
+                 strides = [1,2,1,2,1], paddings = [2,0,2,0,2], final_activation=final_activation)

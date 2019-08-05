@@ -1,0 +1,109 @@
+# model parameters
+model: 
+  # name of model class
+  name: myResnetUnet
+  # number of input channels
+  in_channels: 1
+  # number of output channels
+  out_channels: 1
+  final_activation: relu
+
+# loss functions
+losses:
+    # name of loss class
+  - name: MSSSIM
+    # multiplier of the exact loss
+    alpha: 0.99
+  - name: L1Loss
+    alpha: 0.01
+# добавить scheduler для alpha      
+ 
+# optimizer parameters
+optimizer:
+  # name of optimizer class
+  name: Adam
+  # learning rate
+  lr: 1e-3
+# learning rate scheduler
+scheduler:
+  # name of scheduler class
+  name: MultiStepLR
+  # number of epochs before changing learning rate
+  milestones: [75,90]
+  # multiplier of changing
+  gamma: 0.1
+
+# number of epochs for training
+epochs: 100
+# batch size
+batch_size: 12
+# number of workers
+num_workers: 10
+# number of iterations over the training set
+train_iter: 2
+
+# random seed for reproducebility
+seed: 242
+
+# DataLoader parameters
+dataset:
+  name: FCDataset
+  root_dir: /home/ilyas/ribs_suppression/training_pipeline/data/images
+  mean: !!python/tuple [0, 0, 0]
+  std: !!python/tuple [1, 1, 1]
+  max_pixel_value: 1.0
+  repeat_dataset: 100
+  train_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/train.csv
+  val_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/val.csv
+  test_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/test.csv
+  augmentations:
+    # augmentations to apply on the image during training phase
+# add config for switching on/off wavelet function
+    train:
+      # input size, length of largest size
+      - name: CLAHE
+        clip_limit: 0.1
+        tile_grid_size: !!python/tuple [8, 8]
+        p: 1
+      - name: OneOf
+        augs:
+          - name: GaussNoise
+            p: 0.5
+          - name: Blur
+            blur_limit: 7
+      - name: HorizontalFlip
+        p: 0.5
+      - name: ShiftScaleRotate
+        shift_limit: 0.05
+        scale_limit: 0.4
+        rotate_limit: 20
+        interpolation: 1
+        border_mode: 4
+        p: 1
+      - name: OneOf
+        augs:
+          - name: RandomBrightnessContrast
+            brightness_limit: 0.4
+            contrast_limit: 0.4
+            p: 0.5
+          - name: RandomGamma
+            p: 0.5
+      - name: OneOf
+        augs:
+          - name: GridDistortion
+            distort_limit: 0.4
+            border_mode: 4
+            p: 0.5
+          - name: ElasticTransform
+            sigma: 60
+            border_mode: 4
+            p: 0.5
+            
+    # augmentations to apply on the image during validation and testing phases
+    # basically, just transform the image, so it can fit the network's output 
+    validation:
+      - name: LongestMaxSize
+        max_size: 576
+        p: 1
+logs:
+    logdir: /home/ilyas/ribs_suppression/training_pipeline/snapshots/

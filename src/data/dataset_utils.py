@@ -4,8 +4,7 @@ import src.train.transforms as transforms
 def prepare_transforms(transform_params):
     transforms_list = parse_transforms(transform_params)
     
-    transform = transforms.Compose(transforms_list, additional_targets={'image2': 'image'})
-
+    transform = transforms.Compose(transforms_list, additional_targets={'target': 'image'})
     return transform
 
 

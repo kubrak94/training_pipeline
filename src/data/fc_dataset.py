@@ -5,14 +5,14 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-
+from skimage.transform.histogram_matching import match_histograms
 from src.train.transforms import Normalize, ToGray
 
 
 class FCDataset(Dataset):
     """__init__ and __len__ functions are the same as in TorchvisionDataset"""
     def __init__(self, csv_file, root_dir, repeat_dataset=1,
-                 mean=(0.5, 0.5, 0.5), std=(0.25, 0.25, 0.25), max_pixel_value=1.0, 
+                 mean=0.5, std=0.25, max_pixel_value=1.0, 
                  transforms=None):
         """
         Args:
@@ -39,27 +39,28 @@ class FCDataset(Dataset):
         
         ribs_img_name = os.path.join(self.root_dir,
                                      self.csv_file.iloc[idx]['ribs'])
-        original_image = cv2.imread(ribs_img_name)[..., ::-1]
+        original_image = cv2.imread(ribs_img_name,1)
         clear_img_name = os.path.join(self.root_dir,
                                       self.csv_file.iloc[idx]['cleared'])
-        clear_image = cv2.imread(clear_img_name)[..., ::-1]
-
-        if self.transform:
-            augmented = self.transform(image=original_image, image2=clear_image)
-            original_image = self.to_gray(image=augmented['image'])['image']
-            original_image = self.normalization(image=original_image)['image']
-            original_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2GRAY)
-            clear_image = cv2.cvtColor(augmented['image2'], cv2.COLOR_RGB2GRAY)
-
-        original_image = np.expand_dims(original_image, axis=2)
-        clear_image = np.expand_dims(clear_image, axis=2)
+        clear_image = cv2.imread(clear_img_name,1)
         
-        original_image = np.moveaxis((original_image), -1, 0)
-        clear_image = np.moveaxis((clear_image), -1, 0)
+        clear_image = match_histograms(clear_image, original_image)
+        clear_image = np.round(clear_image).astype(np.uint8)
+        
+        train_pair = {'image': original_image, 'target': clear_image}
+        if self.transform:
+            augmented = self.transform(**train_pair)
 
-        original_image = torch.from_numpy(original_image).type(torch.float32)
-        clear_image = torch.from_numpy(clear_image).type(torch.float32)
+        augmented['image'] = self.normalization(image=augmented['image'])['image']
+        augmented['image'] = augmented['image'][...,0]
+        augmented['target'] = augmented['target'][...,0]
+            
+        augmented['image'] = np.expand_dims(augmented['image'], axis=0)
+        augmented['target'] = np.expand_dims(augmented['target'], axis=0)
 
-        sample = {'input': original_image, 
-                  'target': clear_image}
+        augmented['image'] = torch.from_numpy(augmented['image']).type(torch.float32)
+        augmented['target'] = torch.from_numpy(augmented['target']).type(torch.float32)
+
+        sample = {'input': augmented['image'], 
+                  'target': augmented['target']}
         return sample

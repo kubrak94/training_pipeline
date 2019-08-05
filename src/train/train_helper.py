@@ -22,7 +22,7 @@ import src.data as data
 import src.models as models
 from src.train import learning_rate
 from src.train import loss
-
+import sys
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -90,7 +90,7 @@ def create_logdir(hparams):
     model_out_channels = model_params['out_channels'] if 'out_channels' in model_params else 1
     cur_time = time.ctime().replace(' ', '_').replace(':', '-')
     
-    model_dir = f'/home/konstantin/training_pipeline/models/{model_name}_{model_in_channels}_{model_out_channels}_{cur_time}'
+    model_dir = f'{hparams["logs"]["logdir"]}_{model_name}_{model_in_channels}_{model_out_channels}_{cur_time}'
 
     if not exists(model_dir):
         makedirs(model_dir)
@@ -141,7 +141,7 @@ def prepare_training(hparams, model):
         else:
             loss_alpha = 1
 
-        if loss_name not in ['MSELoss', 'L1Loss', 'MultiLabelMarginLoss', 'MSSSIM']:
+        if loss_name not in ['MSELoss', 'L1Loss', 'MultiLabelMarginLoss', 'MSSSIM', 'MSSSIM_wavelet']:
             weights_path = loss_params.pop('weights_path')
 
             with open(weights_path, 'r') as infile:
@@ -269,43 +269,49 @@ def run_train_val_loader(epoch, loader, mode, model,
     epoch_metrics['total_loss'] = []
 
     for _ in range(0, repeat_num):
-        for i, batch in tqdm(enumerate(loader), total=len(loader)):
-            inputs = batch['input']
-            targets = batch['target']
+        with tqdm(total=len(loader), file=sys.stdout) as pbar:
+            for i, batch in enumerate(loader):
+                inputs = batch['input']
+                targets = batch['target']
 
-            inputs, targets = inputs.to(device), targets.to(device)
+                inputs, targets = inputs.to(device), targets.to(device)
 
-            with torch.set_grad_enabled(mode == 'train'):
-                output = model.forward(inputs)
-                    
-                for criterion in loss_functions:
-                    value = criterion.loss(output, targets)
-                    epoch_metrics[criterion.name].append(value.data.cpu().numpy().astype(np.float))
+                with torch.set_grad_enabled(mode == 'train'):
+                    if mode == 'train':
+                        optimizer.zero_grad()
+                    output = model(inputs)  
 
-                #total_loss_ = total_loss(output, targets)
-                #epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
+
+                    #total_loss_ = total_loss(output, targets)
+                    #epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
+
+                    # TODO: remake this alpha scheduler to work internally
+                    if epoch == 0:
+                        total_loss_ = loss.MSELoss()(output, targets)
+                    elif 0.5 < loss_functions[0].alpha < 1 and len(loss_functions) == 2:
+                        alpha = alpha_scheduler(epoch, loss_functions[0].alpha)
+                        total_loss_ = alpha * torch.log(loss_functions[0].loss(output, targets)) + (1 - alpha) * loss_functions[1].loss(output, targets)
+                    elif 0 < loss_functions[0].alpha < 0.5 and len(loss_functions) == 2:
+                        alpha = alpha_scheduler(epoch, loss_functions[1].alpha)
+                        total_loss_ = (1 - alpha) * torch.log(loss_functions[0].loss(output, targets)) + alpha * loss_functions[1].loss(output, targets)
+                    else:
+                        total_loss_ = total_loss(output, targets)
+
+                    if mode == 'train':
+                        total_loss_.backward()
+                        optimizer.step()
+
+                with torch.no_grad():
+                    for criterion in loss_functions:
+                        value = criterion.loss(output, targets)
+                        epoch_metrics[criterion.name].append(value.data.cpu().numpy().astype(np.float))
+                    epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
+
+                if isinstance(scheduler, learning_rate.CyclicLR):
+                    scheduler.batch_step()
+                pbar.set_description('L: %f' % epoch_metrics['total_loss'][-1])
+                pbar.update(1)
                 
-                # TODO: remake this alpha scheduler to work internally
-                if epoch == 0:
-                    total_loss_ = loss.MSELoss()(output, targets)
-                elif 0.5 < loss_functions[0].alpha < 1 and len(loss_functions) == 2:
-                    alpha = alpha_scheduler(epoch, loss_functions[0].alpha)
-                    total_loss_ = alpha * loss_functions[0].loss(output, targets) + (1 - alpha) * loss_functions[1].loss(output, targets)
-                elif 0 < loss_functions[0].alpha < 0.5 and len(loss_functions) == 2:
-                    alpha = alpha_scheduler(epoch, loss_functions[1].alpha)
-                    total_loss_ = (1 - alpha) * loss_functions[0].loss(output, targets) + alpha * loss_functions[1].loss(output, targets)
-                else:
-                    total_loss_ = total_loss(output, targets)
-                epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
-
-                if mode == 'train':
-                    optimizer.zero_grad()
-                    total_loss_.backward()
-                    optimizer.step()
-
-            if isinstance(scheduler, learning_rate.CyclicLR):
-                scheduler.batch_step()
-    
     for metric_name, metric_values in epoch_metrics.items():
         epoch_metrics[metric_name] = np.mean(np.array(metric_values))
     
@@ -348,7 +354,7 @@ def load_checkpoint(ckpt_path):
 def alpha_scheduler(epoch, base=0.999):
 
     def magic_function(epoch, multiplier=2):
-        a = (epoch - 15) / multiplier
+        a = (epoch + 2) / multiplier
         return (np.exp(a) / (np.exp(a) + 1) )
 
     return base * magic_function(epoch)
