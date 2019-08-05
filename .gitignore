@@ -137,4 +137,7 @@ dmypy.json
 *.pth
 *.tar
 *.tar.gz
+
+
 snapshots/*
+data/images/*
