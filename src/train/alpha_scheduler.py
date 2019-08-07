@@ -32,5 +32,5 @@ class Sigmoid(AlphaScheduler):
 
 
 def sigmoid(multiplier, shift, epoch):
-    a = (epoch - 15) / multiplier
+    a = (epoch - shift) / multiplier
     return (np.exp(a) / (np.exp(a) + 1))
