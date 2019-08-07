@@ -260,6 +260,7 @@ def run_train_val_loader(epoch, loader, mode, model,
 
                     if epoch == 0:
                         total_loss_ = loss.MSELoss()(output, targets)
+                        _ = total_loss(output, targets)
                     else:
                         total_loss_ = total_loss(output, targets)
 
