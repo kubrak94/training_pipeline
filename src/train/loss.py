@@ -1,9 +1,20 @@
+from typing import NamedTuple
+
 from torch.nn import *
 
 import torch
 import torch.nn.functional as F
 from math import exp
 import numpy as np
+
+import src.train.alpha_scheduler as alpha_scheduler
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+class LossInfo(NamedTuple):
+    name: str
+    loss: torch.nn.Module
 
 
 def gaussian(window_size, sigma):
@@ -134,7 +145,8 @@ class MSSSIM(torch.nn.Module):
         # TODO: store window between calls if possible
         # TODO: Fix it!
         return 1 - msssim(img1, img2, window_size=self.window_size, size_average=self.size_average, val_range=self.val_range, normalize=False)
-    
+
+
 class MSSSIM_wavelet(torch.nn.Module):
     def __init__(self, window_size=11, size_average=True, channel=3, val_range=5):
         super(MSSSIM_wavelet, self).__init__()
@@ -149,12 +161,43 @@ class MSSSIM_wavelet(torch.nn.Module):
 
 
 class TotalLoss(torch.nn.Module):
-    def __init__(self, loss_functions):
+    def __init__(self, main_loss_params, aux_loss_params, alpha_scheduler_params={'name': 'Constant'}):
         super(TotalLoss, self).__init__()
-        self.loss_functions = loss_functions
+
+        main_loss_name = main_loss_params['name']
+        main_loss_function = parse_loss_params(main_loss_params)
+        self.main_loss = LossInfo(main_loss_name, main_loss_function)
+        self.main_loss_value = 0
+
+        aux_loss_name = aux_loss_params['name']
+        aux_loss_function = parse_loss_params(aux_loss_params)
+        self.aux_loss = LossInfo(aux_loss_name, aux_loss_function)
+        self.aux_loss_value = 0
+
+        alpha_scheduler_name = alpha_scheduler_params.pop('name')
+        self.alpha_scheduler = alpha_scheduler.__dict__[alpha_scheduler_name](**alpha_scheduler_params)
 
     def forward(self, output, targets):
-        res = self.loss_functions[0].alpha * self.loss_functions[0].loss(output, targets)
-        for i in range(1, len(self.loss_functions)):
-            res += self.loss_functions[i].alpha * self.loss_functions[i].loss(output, targets)
+        self.main_loss_value = self.main_loss.loss(output, targets)
+        self.aux_loss_value = self.aux_loss.loss(output, targets)
+
+        res = self.alpha_scheduler.alpha * self.main_loss_value + (1 - self.alpha_scheduler.alpha) * self.aux_loss_value
+        
         return res
+
+
+def parse_loss_params(loss_params):
+    loss_name = loss_params.pop('name')
+
+    if loss_name not in ['MSELoss', 'L1Loss', 'MultiLabelMarginLoss', 'MSSSIM', 'MSSSIM_wavelet', 'TotalLoss']:
+        weights_path = loss_params.pop('weights_path')
+
+        with open(weights_path, 'r') as infile:
+            loss_params["weight"] = torch.Tensor(json.load(infile))
+
+    loss_function = globals()[loss_name](**loss_params)
+
+    if loss_name not in ['TotalLoss']:
+        loss_function = loss_function.to(device)
+
+    return loss_function

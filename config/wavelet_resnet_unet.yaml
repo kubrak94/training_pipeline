@@ -8,16 +8,26 @@ model:
   out_channels: 4
   final_activation: linear
 
-# loss functions
-losses:
-    # name of loss class
-  - name: MSSSIM_wavelet
-    # multiplier of the exact loss
-    alpha: 0.99
-  - name: L1Loss
-    alpha: 0.01
-# добавить scheduler для alpha      
- 
+# loss function
+loss:
+  # name of loss class
+  name: TotalLoss
+  # higher value of alhpa would be applied to main loss
+  main_loss_params:
+    name: MSSSIM_wavelet
+  aux_loss_params:
+    name: L1Loss
+  # scheduler for multiplier for losses
+  alpha_scheduler_params:
+    # name of scheduler
+    name: Sigmoid
+    # base value for alpha, should be 0.5 < base <= 1
+    base: 0.99
+    # the bigger the value the smoother it growth
+    multiplier: 2
+    # the bigger the value the longer alpha would be near zero
+    shift: -2
+
 # optimizer parameters
 optimizer:
   # name of optimizer class
@@ -38,7 +48,7 @@ epochs: 100
 # batch size
 batch_size: 12
 # number of workers
-num_workers: 10
+num_workers: 6
 # number of iterations over the training set
 train_iter: 2
 
@@ -48,14 +58,14 @@ seed: 242
 # DataLoader parameters
 dataset:
   name: WaveletDataset
-  root_dir: /home/ilyas/ribs_suppression/training_pipeline/data/images
+  root_dir: /home/konstantin/training_pipeline/data/images
   mean: !!python/tuple [0, 0, 0]
   std: !!python/tuple [1, 1, 1]
   max_pixel_value: 1.0
   repeat_dataset: 100
-  train_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/train.csv
-  val_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/val.csv
-  test_csv_file: /home/ilyas/ribs_suppression/training_pipeline/data/test.csv
+  train_csv_file: /home/konstantin/training_pipeline/data/train.csv
+  val_csv_file: /home/konstantin/training_pipeline/data/val.csv
+  test_csv_file: /home/konstantin/training_pipeline/data/test.csv
   augmentations:
     # augmentations to apply on the image during training phase
 # add config for switching on/off wavelet function
@@ -106,4 +116,4 @@ dataset:
         max_size: 576
         p: 1
 logs:
-    logdir: /home/ilyas/ribs_suppression/training_pipeline/snapshots/
+    logdir: /home/konstantin/training_pipeline/snapshots/

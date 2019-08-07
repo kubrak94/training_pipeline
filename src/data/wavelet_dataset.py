@@ -62,8 +62,13 @@ class WaveletDataset(Dataset):
         augmented['image'] = augmented['image'][...,0]
         augmented['target'] = augmented['target'][...,0]        
         
-        augmented['target'] = (augmented['target'] - augmented['image'].mean())/augmented['image'].std()
-        augmented['image'] = (augmented['image'] - augmented['image'].mean())/augmented['image'].std()
+        if not np.isclose(augmented['image'].std(), 0):
+            augmented['target'] = (augmented['target'] - augmented['image'].mean())/augmented['image'].std()
+            augmented['image'] = (augmented['image'] - augmented['image'].mean())/augmented['image'].std()
+        else:
+            cv2.imwrite(f'wavelet_{ribs_img_name}.jpg', augmented['image'])
+            augmented['target'] = (augmented['target'] - 128.)/64.
+            augmented['image'] = (augmented['image'] - 128.)/64.
         
         augmented['image'] = get_decomosition(augmented['image'])
         augmented['target'] = get_decomosition(augmented['target'])

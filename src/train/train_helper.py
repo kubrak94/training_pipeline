@@ -6,6 +6,7 @@ from os.path import join, exists, isfile
 from os import makedirs
 import re
 import shutil
+import sys
 import time
 from typing import NamedTuple, List
 
@@ -22,14 +23,8 @@ import src.data as data
 import src.models as models
 from src.train import learning_rate
 from src.train import loss
-import sys
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-
-class LossInfo(NamedTuple):
-    name: str
-    loss: torch.nn.Module
-    alpha: int = 1
 
 
 class MetricInfo(NamedTuple):
@@ -80,7 +75,7 @@ def load_hparams(hparams_path):
 
 def create_logdir(hparams):
     """
-    Create log directory: f'/home/konstantin/training_pipeline/models/{model_name}_{in_channels}_{out_channels}_{start_time}'
+    Create log directory: f'}{}{model_name}_{in_channels}_{out_channels}_{start_time}'
     """
     model_params = hparams['model']
     model_name = model_params['name']
@@ -112,10 +107,6 @@ def prepare_model(hparams):
     return model
 
 
-def create_total_loss(loss_functions):
-    return lambda x, y: sum(lf.alpha * lf.loss(x, y) for lf in loss_functions)
-
-
 def prepare_training(hparams, model):
     """Converts given hyperparameters to instances of classes.
        Arguments:
@@ -126,32 +117,12 @@ def prepare_training(hparams, model):
            optimizer – torch.optim, optimizer for the model
            scheduler – torhc.nn.lr_scheduler, learning rate scheduler
     """
-    if 'losses' not in hparams:
+    if 'loss' not in hparams:
         raise Exception('You must add loss params to hparams')
 
-    losses_params = hparams['losses']
-    loss_functions = []
-    metrics = []
-    
-    for loss_params in losses_params:
-        loss_name = loss_params.pop('name')
-        
-        if 'alpha' in loss_params:
-            loss_alpha = loss_params.pop('alpha')
-        else:
-            loss_alpha = 1
+    loss_params = hparams['loss']
 
-        if loss_name not in ['MSELoss', 'L1Loss', 'MultiLabelMarginLoss', 'MSSSIM', 'MSSSIM_wavelet']:
-            weights_path = loss_params.pop('weights_path')
-
-            with open(weights_path, 'r') as infile:
-                loss_params["weight"] = torch.Tensor(json.load(infile))
-
-        loss_function = loss.__dict__[loss_name](**loss_params)
-        loss_function = loss_function.to(device)
-        loss_functions.append(LossInfo(loss_name, loss_function, loss_alpha))
-        
-    total_loss = loss.TotalLoss(loss_functions)
+    loss_function = loss.parse_loss_params(loss_params)
 
     if 'optimizer' not in hparams:
         raise Exception('You must add optimizer params to hparams')
@@ -175,7 +146,7 @@ def prepare_training(hparams, model):
     else:
         scheduler = None
 
-    return total_loss, loss_functions, optimizer, scheduler
+    return loss_function, optimizer, scheduler
 
 
 def prepare_dataloader(hparams, mode):
@@ -227,7 +198,10 @@ def add_metrics(summary_writer, epoch_metrics, epoch, mode):
         m_value = metric_value
         if metric_name in ['inference_result']:
             m_value = prepare_infer_image(m_value)
-            summary_writer.add_image('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
+            
+            # add image only each 10 epochs
+            if epoch % 10 == 0:
+                summary_writer.add_image('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
         else:
             summary_writer.add_scalar('{}/{}'.format(mode, metric_name), m_value, epoch + 1)
 
@@ -246,14 +220,13 @@ def prepare_infer_image(infer_result):
 
 
 def run_train_val_loader(epoch, loader, mode, model, 
-                         loss_functions, total_loss, optimizer, scheduler, train_iter=1):
+                         total_loss, optimizer, scheduler, train_iter=1):
     """
     Runs one epoch of the training loop.
     :param epoch: index of the epoch
     :param loader: data loader
     :param mode: 'train' or 'valid'
     :param model: model for training \ validation
-    :param loss_functions: loss function to minimize
     :param optimizer: optimisation function
     :param train_iter: how many times iterate through train dataset
     :return: None
@@ -265,8 +238,11 @@ def run_train_val_loader(epoch, loader, mode, model,
         
     repeat_num = train_iter if mode == 'train' else 1
     
-    epoch_metrics = {l.name: [] for l in loss_functions}
+    epoch_metrics = {}
     epoch_metrics['total_loss'] = []
+    if isinstance(total_loss, loss.TotalLoss): 
+        epoch_metrics[total_loss.main_loss.name] = []
+        epoch_metrics[total_loss.aux_loss.name] = []
 
     for _ in range(0, repeat_num):
         with tqdm(total=len(loader), file=sys.stdout) as pbar:
@@ -277,41 +253,40 @@ def run_train_val_loader(epoch, loader, mode, model,
                 inputs, targets = inputs.to(device), targets.to(device)
 
                 with torch.set_grad_enabled(mode == 'train'):
-                    if mode == 'train':
-                        optimizer.zero_grad()
-                    output = model(inputs)  
-
+                    output = model.forward(inputs)
 
                     #total_loss_ = total_loss(output, targets)
                     #epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
 
-                    # TODO: remake this alpha scheduler to work internally
                     if epoch == 0:
                         total_loss_ = loss.MSELoss()(output, targets)
-                    elif 0.5 < loss_functions[0].alpha < 1 and len(loss_functions) == 2:
-                        alpha = alpha_scheduler(epoch, loss_functions[0].alpha)
-                        total_loss_ = alpha * torch.log(loss_functions[0].loss(output, targets)) + (1 - alpha) * loss_functions[1].loss(output, targets)
-                    elif 0 < loss_functions[0].alpha < 0.5 and len(loss_functions) == 2:
-                        alpha = alpha_scheduler(epoch, loss_functions[1].alpha)
-                        total_loss_ = (1 - alpha) * torch.log(loss_functions[0].loss(output, targets)) + alpha * loss_functions[1].loss(output, targets)
                     else:
                         total_loss_ = total_loss(output, targets)
 
+                    epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
+                    if isinstance(total_loss, loss.TotalLoss):
+                        if not isinstance(total_loss.main_loss_value, int):
+                            main_loss_value = total_loss.main_loss_value.data.cpu().numpy().astype(np.float)
+                        else:
+                            main_loss_value = float(total_loss.main_loss_value)
+                        epoch_metrics[total_loss.main_loss.name].append(main_loss_value)
+
+                        if not isinstance(total_loss.aux_loss_value, int):
+                            aux_loss_value = total_loss.aux_loss_value.data.cpu().numpy().astype(np.float)
+                        else:
+                            aux_loss_value = float(total_loss.aux_loss_value)
+                        epoch_metrics[total_loss.aux_loss.name].append(aux_loss_value)
+
                     if mode == 'train':
+                        optimizer.zero_grad()
                         total_loss_.backward()
                         optimizer.step()
-
-                with torch.no_grad():
-                    for criterion in loss_functions:
-                        value = criterion.loss(output, targets)
-                        epoch_metrics[criterion.name].append(value.data.cpu().numpy().astype(np.float))
-                    epoch_metrics['total_loss'].append(total_loss_.data.cpu().numpy().astype(np.float))
 
                 if isinstance(scheduler, learning_rate.CyclicLR):
                     scheduler.batch_step()
                 pbar.set_description('L: %f' % epoch_metrics['total_loss'][-1])
                 pbar.update(1)
-                
+    
     for metric_name, metric_values in epoch_metrics.items():
         epoch_metrics[metric_name] = np.mean(np.array(metric_values))
     
@@ -348,20 +323,6 @@ def load_checkpoint(ckpt_path):
            model_state_dict, optimizer_state_dict, hparams
 
 
-
-
-    # TODO: move to a separate module
-def alpha_scheduler(epoch, base=0.999):
-
-    def magic_function(epoch, multiplier=2):
-        a = (epoch + 2) / multiplier
-        return (np.exp(a) / (np.exp(a) + 1) )
-
-    return base * magic_function(epoch)
-
-
-
-
 def run_train(args):
     hparams = load_hparams(args.hparams)
 
@@ -373,7 +334,7 @@ def run_train(args):
         yaml.dump(hparams, outfile, default_flow_style=False)
 
     model = prepare_model(hparams)
-    total_loss, loss_functions, optimizer, scheduler = prepare_training(hparams, model)
+    total_loss, optimizer, scheduler = prepare_training(hparams, model)
     
     train_loader = prepare_dataloader(hparams, 'train')
     valid_loader = prepare_dataloader(hparams, 'validation')
@@ -409,14 +370,17 @@ def run_train(args):
     for epoch in range(start_epoch, epochs):
         is_best = False
         train_metrics = run_train_val_loader(epoch, train_loader, 'train', model,
-                                             loss_functions, total_loss, optimizer, scheduler, train_iter)
+                                             total_loss, optimizer, scheduler, train_iter)
         valid_metrics = run_train_val_loader(epoch, valid_loader, 'valid', model,
-                                             loss_functions, total_loss, optimizer, scheduler)
+                                             total_loss, optimizer, scheduler)
 
         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(valid_loss)
         elif (scheduler is not None) and (not isinstance(scheduler, learning_rate.CyclicLR)):
             scheduler.step()
+
+        if isinstance(total_loss, loss.TotalLoss):
+            total_loss.alpha_scheduler.step()
 
         if valid_metrics['total_loss'] < best_metrics:
             best_metrics = valid_metrics['total_loss']
